@@ -37,7 +37,7 @@ INSTALLED_APPS = [
 
     "rest_framework",
     "channels",
-    # "voice",
+    "voice",
     'strawberry.django',
 
 ]
