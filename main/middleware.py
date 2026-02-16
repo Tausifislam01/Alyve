@@ -1,4 +1,3 @@
-from os import wait
 from django.utils.deprecation import MiddlewareMixin
 from .auth import get_user_from_token
 

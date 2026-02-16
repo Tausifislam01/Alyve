@@ -1,9 +1,7 @@
 import strawberry
 from .types import MeResponse, LovedOneType
-from accounts.models import User
 from graphql import GraphQLError
-from voice.models import LovedOne, Memory, VoiceSample
-
+from voice.models import LovedOne
 @strawberry.type
 class Query:
     @strawberry.field

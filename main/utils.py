@@ -1,7 +1,7 @@
 import jwt, random, datetime
 from django.conf import settings
 from datetime import datetime, timedelta
-from accounts.models import User, OTP
+from accounts.models import OTP
 from django.utils import timezone
 from django.core.mail import send_mail
 
