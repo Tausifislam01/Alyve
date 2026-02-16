@@ -1,7 +1,8 @@
 import strawberry
-from .types import MeResponse
+from .types import MeResponse, LovedOneType
 from accounts.models import User
 from graphql import GraphQLError
+from voice.models import LovedOne, Memory, VoiceSample
 
 @strawberry.type
 class Query:
@@ -14,3 +15,10 @@ class Query:
         return MeResponse(
             user = user,
         )
+    
+    @strawberry.field
+    def loved_ones(self, info, limit: int=10, offset: int=20) -> list[LovedOneType]:
+        user = info.context.get("request").user
+        if user is None or user.is_anonymous:
+           raise GraphQLError("Authentication failed", extensions={"code": "UNAUTHENTICATED"})
+        return LovedOne.objects.filter(user=user).order_by("-created_at")[offset:offset+limit]

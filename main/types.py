@@ -1,6 +1,7 @@
 import strawberry 
 from accounts.models import User
 from typing import Optional
+from voice.models import LovedOne, Memory, VoiceSample
 
 @strawberry.django.type(User)
 class UserType:
@@ -51,3 +52,15 @@ class CheckOTPPayload:
 @strawberry.type
 class ChangePasswordPayload:
     success: bool
+
+@strawberry.django.type(LovedOne)
+class LovedOneType:
+    id: strawberry.auto
+    name: strawberry.auto
+    relationship: strawberry.auto
+    nickname_for_user: strawberry.auto
+    description: strawberry.auto
+    last_conversation_at: strawberry.auto
+    speaking_style: strawberry.auto
+    catch_phrase: strawberry.auto
+    created_at: strawberry.auto
