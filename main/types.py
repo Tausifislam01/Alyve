@@ -1,7 +1,7 @@
 import strawberry 
 from accounts.models import User
 from typing import Optional
-from voice.models import LovedOne, Memory, VoiceSample
+from voice.models import LovedOne
 
 @strawberry.django.type(User)
 class UserType:
@@ -10,31 +10,22 @@ class UserType:
     email: strawberry.auto
     is_active: strawberry.auto
 
-# @strawberry.type
-# class ErrorType:
-#     message: str
-#     code: Optional[str] = None
-#
 @strawberry.type
 class MeResponse:
     user: Optional['UserType']
-    # error: Optional['ErrorType']
 
 @strawberry.type
 class AuthPayload:
     access_token: Optional[str]
     refresh_token: Optional[str]
-    # error: Optional[ErrorType]
 
 @strawberry.type
 class RegisterPayload:
     success: bool
-    # error: Optional[ErrorType]
 
 @strawberry.type
 class VerifyOTPPayload:
     success: bool
-    # error: Optional[ErrorType]
     
 @strawberry.type
 class RefreshPayload:
