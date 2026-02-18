@@ -21,129 +21,17 @@ from .providers.tts_elevenlabs import ElevenLabsTTS, ElevenLabsTTSConfig
 
 from .prompting import PromptContext, build_system_prompt, build_reply_instructions
 
+# Keep helper functions importable from consumers.py (backward compat)
+from .consumer_helpers import (
+    _db_filter_from_profile_id,
+    _debug_enabled,
+    _pcm16_stats_le,
+    _silence_pcm16,
+    _normalize_text_for_tts,
+    _chunk_text_for_cadence,
+)
+
 OPENAI_REALTIME_URL = settings.VOICE_APP.get("OPENAI_REALTIME_URL")
-
-
-def _debug_enabled() -> bool:
-    return os.getenv("VOICE_DEBUG", "0") == "1"
-
-
-def _pcm16_stats_le(pcm_bytes: bytes) -> dict:
-    if not pcm_bytes:
-        return {"n": 0}
-
-    n = len(pcm_bytes) // 2
-    if n <= 0:
-        return {"n": 0, "note": "odd_len"}
-
-    mn = 32767
-    mx = -32768
-    s2 = 0.0
-
-    step = max(1, n // 4000)
-    count = 0
-
-    for i in range(0, n, step):
-        lo = pcm_bytes[2 * i]
-        hi = pcm_bytes[2 * i + 1]
-        v = (hi << 8) | lo
-        if v >= 32768:
-            v -= 65536
-
-        mn = v if v < mn else mn
-        mx = v if v > mx else mx
-        s2 += float(v) * float(v)
-        count += 1
-
-    rms = math.sqrt(s2 / max(1, count))
-    return {"n": n, "min": mn, "max": mx, "rms": round(rms, 2), "bytes": len(pcm_bytes), "step": step}
-
-
-def _silence_pcm16(duration_sec: float, sample_rate: int = 24000) -> bytes:
-    if duration_sec <= 0:
-        return b""
-    n_samples = int(sample_rate * duration_sec)
-    if n_samples <= 0:
-        return b""
-    return b"\x00\x00" * n_samples
-
-
-def _normalize_text_for_tts(t: str) -> str:
-    t = (t or "").strip()
-    if not t:
-        return t
-    t = t.replace("...", "…")
-    t = re.sub(r"\s+", " ", t).strip()
-    t = re.sub(r"([.?!,;:])(?=\S)", r"\1 ", t)
-    return t.strip()
-
-
-def _chunk_text_for_cadence(text: str, max_words_per_chunk: int = 10) -> List[Tuple[str, float]]:
-    t = _normalize_text_for_tts(text)
-    if not t:
-        return []
-
-    parts: List[str] = []
-    buf = ""
-    for ch in t:
-        buf += ch
-        if ch in ".?!":
-            parts.append(buf.strip())
-            buf = ""
-    if buf.strip():
-        parts.append(buf.strip())
-
-    out: List[Tuple[str, float]] = []
-
-    def add(seg: str, pause: float):
-        seg = (seg or "").strip()
-        if seg:
-            out.append((seg, pause))
-
-    for sent in parts:
-        sent = sent.strip()
-        if not sent:
-            continue
-
-        phrases: List[str] = []
-        pbuf = ""
-        for ch in sent:
-            pbuf += ch
-            if ch in ",;:":
-                phrases.append(pbuf.strip())
-                pbuf = ""
-        if pbuf.strip():
-            phrases.append(pbuf.strip())
-
-        for ph in phrases:
-            words = ph.split()
-            if len(words) <= max_words_per_chunk:
-                end = ph[-1] if ph else ""
-                if end in ",;:":
-                    add(ph, 0.14)
-                elif end in ".?!":
-                    add(ph, 0.30)
-                else:
-                    add(ph, 0.18)
-            else:
-                for i in range(0, len(words), max_words_per_chunk):
-                    seg = " ".join(words[i: i + max_words_per_chunk]).strip()
-                    if i + max_words_per_chunk >= len(words):
-                        if ph and ph[-1] in ".?!,;:" and seg and seg[-1] not in ".?!,;:":
-                            seg = seg + ph[-1]
-                    end = seg[-1] if seg else ""
-                    if end in ",;:":
-                        add(seg, 0.14)
-                    elif end in ".?!":
-                        add(seg, 0.30)
-                    else:
-                        add(seg, 0.16)
-
-    if out:
-        last_text, last_pause = out[-1]
-        out[-1] = (last_text, min(last_pause, 0.22))
-
-    return out
 
 
 @dataclass
@@ -162,6 +50,11 @@ class SessionCfg:
     loved_one_relationship: str = ""
     loved_one_nickname_for_user: str = ""
     loved_one_speaking_style: str = ""
+
+    # NEW model fields
+    catch_phrase: str = ""
+    description: str = ""
+    core_memories: str = ""
 
     eleven_voice_id: str = ""
 
@@ -499,7 +392,8 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
     def _load_persona_from_db(self, profile_id: str, loved_one_id: int) -> bool:
         from .models import LovedOne
 
-        lo = LovedOne.objects.filter(profile_id=profile_id, id=loved_one_id).first()
+        filt, _profile_key = _db_filter_from_profile_id(profile_id)
+        lo = LovedOne.objects.filter(**filt, id=loved_one_id).first()
         if not lo:
             return False
 
@@ -508,6 +402,12 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
         self.cfg.loved_one_nickname_for_user = (lo.nickname_for_user or "").strip()
         self.cfg.loved_one_speaking_style = (lo.speaking_style or "").strip()
         self.cfg.eleven_voice_id = (getattr(lo, "eleven_voice_id", "") or "").strip()
+
+        # New model fields (safe even if empty)
+        self.cfg.catch_phrase = (getattr(lo, "catch_phrase", "") or "").strip()
+        self.cfg.description = (getattr(lo, "description", "") or "").strip()
+        self.cfg.core_memories = (getattr(lo, "core_memories", "") or "").strip()
+
         return True
 
     async def _startup_openai(self):
@@ -616,8 +516,11 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
 
     async def _send_openai_system_prompt(self):
         try:
+            # normalize profile_id for RAG filters
+            _filt, profile_key = _db_filter_from_profile_id(self.cfg.profile_id)
+
             rag = self.rag.query(
-                profile_id=self.cfg.profile_id,
+                profile_id=profile_key,
                 loved_one_id=self.cfg.loved_one_id,
                 query_text="session_bootstrap",
                 k=5,
@@ -641,6 +544,15 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
                 "Tone guidance (apply subtly; do not repeat adjectives/labels): "
                 f"{self.cfg.loved_one_speaking_style}"
             )
+
+        # NEW fields in persona
+        if self.cfg.catch_phrase:
+            persona_lines.append(f"Catch phrase (use rarely): {self.cfg.catch_phrase}")
+        if self.cfg.description:
+            persona_lines.append(f"Description: {self.cfg.description}")
+        if self.cfg.core_memories:
+            persona_lines.append("Core memories (high priority, treat as true): " + self.cfg.core_memories)
+
         persona_block = "\n".join(persona_lines) if persona_lines else "(not provided)"
 
         ctx = PromptContext(
@@ -675,8 +587,10 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
         self._last_user_transcript = t
 
         try:
+            _filt, profile_key = _db_filter_from_profile_id(self.cfg.profile_id)
+
             rag = self.rag.query(
-                profile_id=self.cfg.profile_id,
+                profile_id=profile_key,
                 loved_one_id=self.cfg.loved_one_id,
                 query_text=t,
                 k=6,
@@ -789,8 +703,9 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
 
         existing = set()
         try:
+            _filt, profile_key = _db_filter_from_profile_id(self.cfg.profile_id)
             recent = self.rag.query(
-                profile_id=self.cfg.profile_id,
+                profile_id=profile_key,
                 loved_one_id=self.cfg.loved_one_id,
                 query_text=user_text,
                 k=10,
@@ -809,20 +724,36 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
             await self._save_memory_to_db_and_rag(self.cfg.profile_id, self.cfg.loved_one_id, text)
 
     @database_sync_to_async
-    def _db_create_memory(self, profile_id: str, loved_one_id: int, text: str) -> int:
-        from .models import Memory, LovedOne
+    def _db_create_memory(self, profile_id: str, loved_one_id: int, text: str) -> str:
+        """
+        New models.py: Memory model removed.
+        Persist memory by appending to LovedOne.core_memories.
+        Return a generated memory_id for RAG.
+        """
+        import uuid
+        from .models import LovedOne
 
-        lo = LovedOne.objects.filter(profile_id=profile_id, id=loved_one_id).first()
+        filt, _profile_key = _db_filter_from_profile_id(profile_id)
+        lo = LovedOne.objects.filter(**filt, id=loved_one_id).first()
         if not lo:
             raise ValueError("loved_one not found")
 
-        m = Memory.objects.create(loved_one=lo, text=text)
-        return int(m.id)
+        existing = (getattr(lo, "core_memories", "") or "").strip()
+        combined = (existing + "\n" + (text or "").strip()).strip() if existing else (text or "").strip()
+        lo.core_memories = combined
+
+        try:
+            lo.save(update_fields=["core_memories"])
+        except Exception:
+            lo.save()
+
+        return uuid.uuid4().hex
 
     async def _save_memory_to_db_and_rag(self, profile_id: str, loved_one_id: int, text: str):
         memory_id = await self._db_create_memory(profile_id, loved_one_id, text)
-        self.rag.add_memory(profile_id=profile_id, loved_one_id=loved_one_id, text=text, memory_id=str(memory_id))
-        await self._send_json({"type": "event", "name": "memory.auto.saved", "memory_id": memory_id})
+        _filt, profile_key = _db_filter_from_profile_id(profile_id)
+        self.rag.add_memory(profile_id=profile_key, loved_one_id=loved_one_id, text=text, memory_id=str(memory_id))
+        await self._send_json({"type": "event", "name": "memory.auto.saved", "memory_id": str(memory_id)})
 
     async def _speak_elevenlabs(self, text: str, gen: int):
         await self._send_json({"type": "event", "name": "tts.elevenlabs.start", "gen": gen})
@@ -896,7 +827,7 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
                     for i in range(0, len(sil), frame):
                         if self._ws_closed:
                             return
-                        b64 = base64.b64encode(sil[i: i + frame]).decode("ascii")
+                        b64 = base64.b64encode(sil[i : i + frame]).decode("ascii")
                         if gen != int(getattr(self, "_audio_gen", 0)):
                             return
                         await self._send_json({"type": "rt.audio.delta", "audio_b64": b64, "gen": gen})
@@ -953,7 +884,6 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
                     self._barge_in_ts = asyncio.get_running_loop().time()
 
                     if thr <= 0.0:
-                       
                         continue
 
                     now = asyncio.get_running_loop().time()

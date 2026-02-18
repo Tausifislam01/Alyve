@@ -10,9 +10,9 @@ from main.views import CustomGraphQLView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    # path("api/v1/voice/", include("voice.urls")),
+    path("api/v1/voice/", include("voice.urls")),
     path("api/v1/accounts/", include("accounts.urls")),
-    path("test/", TemplateView.as_view(template_name="index.html")),
+    # path("test/", TemplateView.as_view(template_name="index.html")),
     path("graphql/", csrf_exempt(CustomGraphQLView.as_view(schema=schema))),
 ]
 

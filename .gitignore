@@ -121,3 +121,7 @@ logs/
 # Raw recordings (local only)
 raw_recording/
 raw_recording/**
+
+
+voice/test_urls.py
+voice/test_views.py

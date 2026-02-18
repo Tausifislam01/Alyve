@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 from . import views
 
 urlpatterns = [
@@ -8,4 +8,5 @@ urlpatterns = [
     path("lovedone/get/", views.lovedone_get),
     path("memory/add/", views.add_memory),
     path("voice/upload/", views.upload_voice_sample),
+    # path("test/", include("voice.test_urls")),
 ]
