@@ -1,0 +1,267 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Conversation History (Chat View)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg:#0b0b0c;
+      --panel:#121214;
+      --panel2:#0f0f11;
+      --border:#242426;
+      --text:#e8eaed;
+      --muted:#9aa0a6;
+      --user:#2563eb;
+      --assistant:#1f2937;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
+    header{
+      position:sticky;top:0;z-index:10;
+      background:var(--panel);border-bottom:1px solid var(--border);
+      padding:12px 14px;
+    }
+    h1{margin:0;font-size:16px}
+    .muted{color:var(--muted);font-size:12px}
+    .wrap{display:grid;grid-template-columns:320px 1fr;min-height:calc(100vh - 56px)}
+    .left{background:var(--panel);border-right:1px solid var(--border)}
+    .right{display:flex;flex-direction:column}
+    .controls{padding:12px;border-bottom:1px solid var(--border)}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    input,button{
+      padding:8px 10px;border-radius:10px;border:1px solid var(--border);
+      background:var(--panel2);color:var(--text);
+    }
+    button{cursor:pointer;background:#16161a}
+    button:hover{background:#1c1c22}
+    .sessions{padding:10px;display:flex;flex-direction:column;gap:8px;overflow:auto;max-height:calc(100vh - 56px - 86px)}
+    .sess{
+      border:1px solid var(--border);border-radius:12px;padding:10px;cursor:pointer;background:var(--panel2);
+    }
+    .sess:hover{background:#16161a}
+    .sess.active{outline:2px solid #2563eb66;background:#101a2a}
+    .sessTitle{font-weight:700}
+    .chatTop{padding:10px 14px;border-bottom:1px solid var(--border);background:var(--panel)}
+    .chat{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+    .bubble{
+      max-width: 820px;
+      padding:10px 12px;border-radius:16px;
+      border:1px solid var(--border);
+      white-space:pre-wrap; word-break:break-word;
+      line-height:1.35;
+    }
+    .bubble.user{margin-left:auto;background:color-mix(in oklab, var(--user) 22%, #0b0b0c);border-color:#2563eb55}
+    .bubble.assistant{margin-right:auto;background:var(--assistant)}
+    .bubble.system{margin:0 auto;background:#111827;border-color:#334155}
+    .meta{margin-top:6px;font-size:11px;color:var(--muted)}
+    .empty{color:var(--muted);font-size:13px;padding:10px}
+    .status{margin-left:auto}
+    @media (max-width: 900px){
+      .wrap{grid-template-columns: 1fr;}
+      .left{border-right:none;border-bottom:1px solid var(--border)}
+      .sessions{max-height:260px}
+    }
+  </style>
+</head>
+
+<body>
+<header>
+  <h1>Conversation History (Chat View)</h1>
+  <div class="muted">Uses /api/v1/conversations/sessions and /messages</div>
+</header>
+
+<div class="wrap">
+  <aside class="left">
+    <div class="controls">
+      <div class="row">
+        <label class="muted">Profile ID</label>
+        <input id="profileId" value="default" />
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <label class="muted">Loved One ID</label>
+        <input id="lovedOneId" type="number" value="1" min="1" />
+        <button id="btnLoadSessions">Load</button>
+        <span id="status" class="muted status"></span>
+      </div>
+    </div>
+
+    <div id="sessions" class="sessions"></div>
+  </aside>
+
+  <main class="right">
+    <div class="chatTop">
+      <div id="sessionMeta" class="muted">Pick a session to view the chat.</div>
+    </div>
+    <div id="chat" class="chat">
+      <div class="empty">No session selected.</div>
+    </div>
+  </main>
+</div>
+
+<script>
+(() => {
+  const profileIdEl = document.getElementById("profileId");
+  const lovedOneIdEl = document.getElementById("lovedOneId");
+  const btnLoadSessions = document.getElementById("btnLoadSessions");
+  const statusEl = document.getElementById("status");
+  const sessionsEl = document.getElementById("sessions");
+  const chatEl = document.getElementById("chat");
+  const metaEl = document.getElementById("sessionMeta");
+
+  const API_BASE = "/api/v1/conversations";
+
+  let currentNames = { user: "User", assistant: "Loved One" };
+
+  function setStatus(s){ statusEl.textContent = s || ""; }
+
+  async function fetchJson(url) {
+    const res = await fetch(url, { headers: { "Accept": "application/json" }});
+    const txt = await res.text();
+    let j = null;
+    try { j = JSON.parse(txt); } catch {}
+    if (!res.ok) {
+      const msg = (j && (j.error || j.detail)) ? (j.error || j.detail) : txt;
+      throw new Error(msg || ("HTTP " + res.status));
+    }
+    return j;
+  }
+
+  function escapeHtml(s) {
+    return String(s || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function fmtTs(iso){
+    if (!iso) return "";
+    try { return new Date(iso).toLocaleString(); } catch { return String(iso); }
+  }
+
+  function clearChat(msg){
+    chatEl.innerHTML = `<div class="empty">${escapeHtml(msg)}</div>`;
+  }
+
+  function renderSessions(items) {
+    sessionsEl.innerHTML = "";
+    metaEl.textContent = "Pick a session to view the chat.";
+    clearChat("No session selected.");
+
+    if (!items || !items.length) {
+      sessionsEl.innerHTML = `<div class="empty">No sessions found.</div>`;
+      return;
+    }
+
+    for (const s of items) {
+      const div = document.createElement("div");
+      div.className = "sess";
+      div.dataset.sessionId = s.id;
+
+      const title = s.title ? s.title : `Session #${s.id}`;
+      const started = fmtTs(s.started_at);
+      const ended = s.ended_at ? fmtTs(s.ended_at) : "—";
+
+      div.innerHTML = `
+        <div class="sessTitle">${escapeHtml(title)}</div>
+        <div class="muted">Started: ${escapeHtml(started)}</div>
+        <div class="muted">Ended: ${escapeHtml(ended)}</div>
+        <div class="muted">You: ${escapeHtml(s.user_display || s.profile_id || "User")}</div>
+        <div class="muted">Loved One: ${escapeHtml(s.loved_one_name || "Loved One")}</div>
+      `;
+
+      div.addEventListener("click", async () => {
+        for (const el of sessionsEl.querySelectorAll(".sess")) el.classList.remove("active");
+        div.classList.add("active");
+        await loadMessages(s.id);
+      });
+
+      sessionsEl.appendChild(div);
+    }
+  }
+
+  function renderChat(messages){
+    chatEl.innerHTML = "";
+    if (!messages || !messages.length){
+      clearChat("No messages in this session.");
+      return;
+    }
+
+    for (const m of messages){
+      const role = (m.role || "").toLowerCase();
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble " + (role || "assistant");
+      bubble.innerHTML = escapeHtml(m.content || "");
+
+      // dynamic name label (NOT stored in DB per message)
+      const label =
+        role === "assistant" ? currentNames.assistant :
+        role === "user" ? currentNames.user :
+        "System";
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = `${label} • ${fmtTs(m.created_at)}`;
+
+      bubble.appendChild(meta);
+      chatEl.appendChild(bubble);
+    }
+
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+
+  async function loadSessions() {
+    const profile_id = (profileIdEl.value || "default").trim();
+    const loved_one_id = Number(lovedOneIdEl.value || 0);
+
+    if (!loved_one_id) {
+      setStatus("Enter loved_one_id");
+      return;
+    }
+
+    setStatus("Loading…");
+    try {
+      const url = `${API_BASE}/sessions/?profile_id=${encodeURIComponent(profile_id)}&loved_one_id=${encodeURIComponent(loved_one_id)}&limit=50`;
+      const j = await fetchJson(url);
+      const items = j.items || [];
+      renderSessions(items);
+      setStatus(`Loaded ${items.length}`);
+    } catch (e) {
+      setStatus("Error: " + (e?.message || e));
+      sessionsEl.innerHTML = "";
+      clearChat("Failed to load sessions.");
+    }
+  }
+
+  async function loadMessages(sessionId) {
+    const profile_id = (profileIdEl.value || "default").trim();
+    setStatus("Loading chat…");
+
+    try {
+      const url = `${API_BASE}/messages/?profile_id=${encodeURIComponent(profile_id)}&session_id=${encodeURIComponent(sessionId)}&limit=500`;
+      const j = await fetchJson(url);
+
+      // read dynamic names from backend session payload
+      const userName = (j.session && (j.session.user_display || j.session.profile_id)) || "User";
+      const lovedOneName = (j.session && j.session.loved_one_name) || "Loved One";
+      currentNames = { user: userName, assistant: lovedOneName };
+
+      metaEl.textContent = `Session #${j.session?.id} • ${userName} ↔ ${lovedOneName} • Messages: ${j.count}`;
+      renderChat(j.items || []);
+      setStatus("Done");
+    } catch (e) {
+      setStatus("Error: " + (e?.message || e));
+      clearChat("Failed to load messages.");
+    }
+  }
+
+  btnLoadSessions.addEventListener("click", loadSessions);
+  loadSessions();
+})();
+</script>
+
+</body>
+</html>

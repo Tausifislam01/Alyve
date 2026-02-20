@@ -14,6 +14,7 @@ import websockets
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.conf import settings
+from django.utils import timezone  # <-- ADDED (needed to end sessions)
 
 from .rag_factory import get_rag
 from .memory_auto import extract_memories_via_openai, heuristic_gate
@@ -172,6 +173,137 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
 
         return grace
 
+    # ==========================================================
+    # ADDED: Conversation DB helpers (new conversations app)
+    # ==========================================================
+
+    @database_sync_to_async
+    def _db_create_conversation_session(self, profile_id: str, loved_one_id: int) -> int:
+        """
+        Creates a conversations.ConversationSession row.
+        - If profile_id is numeric => treat as user_id (your existing convention).
+        - Otherwise store profile_id and keep user NULL.
+        """
+        from conversations.models import ConversationSession
+
+        pid = (profile_id or "default").strip()
+        user_id = int(pid) if pid.isdigit() else None
+
+        s = ConversationSession.objects.create(
+            user_id=user_id,
+            profile_id=pid,
+            loved_one_id=int(loved_one_id),
+        )
+        return int(s.id)
+
+    @database_sync_to_async
+    def _db_end_conversation_session(self, session_id: int):
+        from conversations.models import ConversationSession
+
+        sid = int(session_id or 0)
+        if not sid:
+            return
+        ConversationSession.objects.filter(id=sid, ended_at__isnull=True).update(ended_at=timezone.now())
+
+    @database_sync_to_async
+    def _db_add_message(self, session_id: int, role: str, content: str):
+        """
+        Stores the full message text as one row.
+        """
+        from conversations.models import ConversationMessage, ConversationSession
+
+        sid = int(session_id or 0)
+        if not sid:
+            return
+
+        text = (content or "").strip()
+        if not text:
+            return
+
+        last_seq = (
+            ConversationMessage.objects.filter(session_id=sid)
+            .order_by("-seq")
+            .values_list("seq", flat=True)
+            .first()
+        )
+        seq = int(last_seq or 0) + 1
+
+        ConversationMessage.objects.create(
+            session_id=sid,
+            role=(role or "user"),
+            content=text,
+            seq=seq,
+        )
+        ConversationSession.objects.filter(id=sid).update(last_activity_at=timezone.now())
+
+    @database_sync_to_async
+    def _db_get_recent_history(self, session_id: int, max_msgs: int = 14):
+        """
+        Returns last N messages in chronological order: [{role, content, seq}, ...]
+        """
+        from conversations.models import ConversationMessage
+
+        sid = int(session_id or 0)
+        if not sid:
+            return []
+
+        qs = ConversationMessage.objects.filter(session_id=sid).order_by("-seq")[: int(max_msgs)]
+        rows = list(qs.values("role", "content", "seq"))
+        rows.reverse()
+        return rows
+
+    async def _inject_recent_history_context(self):
+        """
+        Inject recent DB chat history as a system message before response.create.
+        This lets the model use your stored conversation as memory/context.
+        """
+        if self._openai_ws is None:
+            return
+
+        sid = int(getattr(self, "_conv_session_id", 0) or 0)
+        if not sid:
+            return
+
+        max_msgs = int(os.getenv("HISTORY_MAX_MSGS", "14"))
+        rows = await self._db_get_recent_history(sid, max_msgs=max_msgs)
+        if not rows:
+            return
+
+        lines: List[str] = []
+        for r in rows:
+            role = (r.get("role") or "").strip()
+            content = (r.get("content") or "").strip()
+            if not content:
+                continue
+            if role == "user":
+                lines.append(f"User: {content}")
+            elif role == "assistant":
+                lines.append(f"You: {content}")
+            else:
+                lines.append(f"{role}: {content}")
+
+        if not lines:
+            return
+
+        history_text = (
+            "RECENT CONVERSATION HISTORY (verbatim):\n"
+            + "\n".join(lines[-80:])
+            + "\nUse this for continuity with what was previously said.\n"
+        )
+
+        await self._send_openai(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": history_text}],
+                },
+            }
+        )
+
+    # ==========================================================
+
     async def _schedule_response_after_grace(self, snapshot: str, grace_ms: int):
         try:
             await asyncio.sleep(max(0.0, grace_ms / 1000.0))
@@ -187,6 +319,12 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
 
             self._pending_transcript = ""
             self._awaiting_transcript_after_stop = False
+
+            # ADDED: store FULL user message once per turn
+            try:
+                await self._db_add_message(int(getattr(self, "_conv_session_id", 0) or 0), "user", final_text)
+            except Exception:
+                pass
 
             await self._inject_rag_for_turn_and_create_response(final_text)
         except asyncio.CancelledError:
@@ -271,6 +409,9 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
         # track last barge-in time
         self._barge_in_ts: float = 0.0
 
+        # ADDED: conversation session id holder
+        self._conv_session_id: int = 0
+
         await self._send_json({"type": "session.ready"})
 
     async def disconnect(self, close_code):
@@ -280,6 +421,12 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
         if t and not t.done():
             t.cancel()
         self._pending_response_task = None
+
+        # ADDED: end DB conversation session
+        try:
+            await self._db_end_conversation_session(int(getattr(self, "_conv_session_id", 0) or 0))
+        except Exception:
+            pass
 
         await self._cancel_tts()
         await self._shutdown_openai()
@@ -352,8 +499,19 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
                 )
                 return
 
+            # ADDED: create DB conversation session (once per websocket session)
+            try:
+                self._conv_session_id = await self._db_create_conversation_session(self.cfg.profile_id, self.cfg.loved_one_id)
+            except Exception:
+                self._conv_session_id = 0
+
             await self._send_json(
-                {"type": "session.started", "profile_id": self.cfg.profile_id, "loved_one_id": self.cfg.loved_one_id}
+                {
+                    "type": "session.started",
+                    "profile_id": self.cfg.profile_id,
+                    "loved_one_id": self.cfg.loved_one_id,
+                    "conv_session_id": self._conv_session_id,  # ADDED (safe for clients to ignore)
+                }
             )
             await self._startup_openai()
             return
@@ -585,6 +743,12 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
             return
 
         self._last_user_transcript = t
+
+        # ADDED: inject recent DB conversation history as context
+        try:
+            await self._inject_recent_history_context()
+        except Exception:
+            pass
 
         try:
             _filt, profile_key = _db_filter_from_profile_id(self.cfg.profile_id)
@@ -953,6 +1117,12 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
                     self._last_assistant_text = text
                     self._response_in_flight = False
                     self._ai_started = False
+
+                    # ADDED: store FULL assistant reply once per turn
+                    try:
+                        await self._db_add_message(int(getattr(self, "_conv_session_id", 0) or 0), "assistant", text)
+                    except Exception:
+                        pass
 
                     await self._send_json({"type": "ai.text.final", "text": text})
                     await self._fire_auto_memory(text, et)

@@ -12,8 +12,12 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/v1/voice/", include("voice.urls")),
     path("api/v1/accounts/", include("accounts.urls")),
-    # path("test/", TemplateView.as_view(template_name="index.html")),
+    path("test/", TemplateView.as_view(template_name="index.html")),
     path("graphql/", csrf_exempt(CustomGraphQLView.as_view(schema=schema))),
+    path("api/v1/conversations/", include("conversations.urls")),
+    path("history/", TemplateView.as_view(template_name="conversations_history.html")),
+
+
 ]
 
 if settings.DEBUG:
