@@ -24,13 +24,6 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "")
 if not DEBUG and not SECRET_KEY:
     raise RuntimeError("DJANGO_SECRET_KEY must be set in production")
 ALLOWED_HOSTS = ["*"]
-# # Allowed hosts: comma-separated env, e.g. "example.com,api.example.com"
-# _allowed = os.getenv("DJANGO_ALLOWED_HOSTS", "")
-# if _allowed.strip():
-#     ALLOWED_HOSTS = [h.strip() for h in _allowed.split(",") if h.strip()]
-# else:
-#     # safe local defaults
-#     ALLOWED_HOSTS = ["localhost", "127.0.0.1", '*']
 
 TRUSTED_ORIGINS = [f"http://{host}" for host in ALLOWED_HOSTS] + [f"https://{host}" for host in ALLOWED_HOSTS]
 
