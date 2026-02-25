@@ -6,6 +6,7 @@ from .utils import generate_access_token, generate_refresh_token
 from voice.models import LovedOne
 from .serializers import UserAvatarSerializer, LovedOneVoiceFileSerializer
 import logging
+from voice.views import _maybe_clone_eleven_voice
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,13 @@ class LovedOneVoiceUploadAPIView(GenericAPIView):
                 loved_one = LovedOne.objects.get(id=loved_one_id)
                 loved_one.voice_file = voice_file
                 loved_one.save()
+            # get the file path of the uploaded voice file
+            file_path = loved_one.voice_file.path
+            # clone the voice file to ElevenLabs if it doesn't exist there
+            voice_id = _maybe_clone_eleven_voice(loved_one, [file_path])
+            print(f"Voice ID: {voice_id}")
+            loved_one.eleven_voice_id = voice_id
+            loved_one.save()
             data = {
                 "id": loved_one.id,
                 "name": loved_one.name,
