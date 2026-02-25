@@ -29,7 +29,8 @@ class UserAvatarUpdateView(GenericAPIView):
             user = request.user
             user.avatar = avatar_file
             user.save()
-            return Response({"message": "Avatar uploaded successfully"}, status=200)
+            avatar_url = user.avatar.url if user.avatar else None
+            return Response({"message": "Avatar uploaded successfully", "avatar_url": avatar_url}, status=200)
         else:
             logger.error(f"Avatar upload failed: {serializer.errors}")
             return Response(serializer.errors, status=400)
@@ -44,7 +45,7 @@ class LovedOneVoiceUploadAPIView(GenericAPIView):
             voice_file = serializer.validated_data['voice_file']
             loved_one_id = serializer.validated_data.get('id')
             if not LovedOne.objects.filter(id=loved_one_id).exists():
-                loved_one = LovedOne.objects.create(id=loved_one_id, voice_file=voice_file)
+                loved_one = LovedOne.objects.create(id=loved_one_id, voice_file=voice_file, user=request.user)
             else:
                 loved_one = LovedOne.objects.get(id=loved_one_id)
                 loved_one.voice_file = voice_file
