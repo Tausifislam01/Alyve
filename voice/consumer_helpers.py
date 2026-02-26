@@ -6,16 +6,16 @@ import re
 from typing import List, Tuple
 
 
-def _db_filter_from_profile_id(profile_id: str):
-    """
-    New models.py: LovedOne has user FK.
-    Backward-compat: treat numeric profile_id as user_id; otherwise anonymous rows (user is NULL).
-    Returns: (django filter dict, rag_profile_key)
-    """
-    pid = (profile_id or "").strip()
-    if pid.isdigit():
-        return {"user_id": int(pid)}, pid
-    return {"user__isnull": True}, "default"
+# def _db_filter_from_profile_id(profile_id: str):
+#     """
+#     New models.py: LovedOne has user FK.
+#     Backward-compat: treat numeric profile_id as user_id; otherwise anonymous rows (user is NULL).
+#     Returns: (django filter dict, rag_profile_key)
+#     """
+#     pid = (profile_id or "").strip()
+#     if pid.isdigit():
+#         return {"user_id": int(pid)}, pid
+#     return {"user__isnull": True}, "default"
 
 
 def _debug_enabled() -> bool:

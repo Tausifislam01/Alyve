@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
-import math
 import os
 import re
 import audioop
@@ -24,7 +23,7 @@ from .prompting import PromptContext, build_system_prompt, build_reply_instructi
 
 # Keep helper functions importable from consumers.py (backward compat)
 from .consumer_helpers import (
-    _db_filter_from_profile_id,
+    # _db_filter_from_profile_id,
     _debug_enabled,
     _pcm16_stats_le,
     _silence_pcm16,
@@ -375,6 +374,10 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
         self.cfg = SessionCfg()
         self.rag = get_rag()
 
+        # Authenticated user from TokenAuthMiddleware (?access_token=…)
+        self._user = self.scope.get("user", None)
+        print(f"WebSocket connection from user: {self._user} (authenticated: {getattr(self._user, 'is_authenticated', False)})")
+
         self._audio_q: asyncio.Queue[bytes] = asyncio.Queue(maxsize=200)
         self._openai_ws: Optional[websockets.WebSocketClientProtocol] = None
         self._task_out: Optional[asyncio.Task] = None
@@ -476,8 +479,16 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
         mtype = content.get("type")
 
         if mtype == "session.start":
-            self.cfg.profile_id = (content.get("profile_id") or "default").strip()
+            # Prefer authenticated user; fall back to profile_id from payload
+            user = getattr(self, "_user", None)
+            print(f"Session start from user: {user} (authenticated: {getattr(user, 'is_authenticated', False)})")
+            if user and getattr(user, "is_authenticated", False):
+                self.cfg.profile_id = str(user.id)
+            else:
+                self.cfg.profile_id = (content.get("profile_id") or "default").strip()
+
             self.cfg.loved_one_id = int(content.get("loved_one_id") or 0)
+            print(f"Session config: profile_id={self.cfg.profile_id}, loved_one_id={self.cfg.loved_one_id}")
             if not self.cfg.loved_one_id:
                 await self._send_json({"type": "error", "error": "loved_one_id is required"})
                 return
@@ -510,7 +521,8 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
                     "type": "session.started",
                     "profile_id": self.cfg.profile_id,
                     "loved_one_id": self.cfg.loved_one_id,
-                    "conv_session_id": self._conv_session_id,  # ADDED (safe for clients to ignore)
+                    "conv_session_id": self._conv_session_id,
+                    "authenticated": bool(user and getattr(user, "is_authenticated", False)),
                 }
             )
             await self._startup_openai()
@@ -549,9 +561,12 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _load_persona_from_db(self, profile_id: str, loved_one_id: int) -> bool:
         from .models import LovedOne
-
-        filt, _profile_key = _db_filter_from_profile_id(profile_id)
+        print(f"Loading persona from DB for profile_id: {profile_id}, loved_one_id: {loved_one_id}")
+        # filt, _profile_key = _db_filter_from_profile_id(profile_id)
+        filt = {"user_id": profile_id}
+        print(f"Loading persona from DB with filter: {filt}, loved_one_id: {loved_one_id}")
         lo = LovedOne.objects.filter(**filt, id=loved_one_id).first()
+        print(f"DB query result for LovedOne: {lo}")
         if not lo:
             return False
 

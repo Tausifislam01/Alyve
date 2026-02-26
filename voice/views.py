@@ -28,14 +28,9 @@ def _lo_queryset_for_profile(profile_id: str, request=None):
     if request is not None:
         u = getattr(request, "user", None)
         if u is not None and getattr(u, "is_authenticated", False):
-            return LovedOne.objects.filter(user=u), str(u.id)
+            return LovedOne.objects.filter(user=u)
 
-    pid = (profile_id or "").strip()
-    if pid.isdigit():
-        return LovedOne.objects.filter(user_id=int(pid)), pid
-
-    return LovedOne.objects.filter(user__isnull=True), "default"
-
+    return LovedOne.objects.none()
 
 def _maybe_clone_eleven_voice(lo: LovedOne, sample_paths: list[str]) -> str:
     """
@@ -63,6 +58,7 @@ def _maybe_clone_eleven_voice(lo: LovedOne, sample_paths: list[str]) -> str:
         "description": f"Cloned voice for LovedOne id={lo.id}",
     }
 
+    print(f"file paths for cloning: {sample_paths}")
     files = []
     for p in sample_paths:
         try:
@@ -169,7 +165,9 @@ def lovedone_get(request):
     if not loved_one_id:
         return Response({"error": "loved_one_id is required"}, status=400)
 
-    qs, _profile_key = _lo_queryset_for_profile(profile_id, request=request)
+    qs = _lo_queryset_for_profile(profile_id, request=request)
+    print(f"Debug: lovedone_get qs={qs}")
+    print(f"Debug: lovedone_get filter id={loved_one_id}")
     lo = qs.filter(id=loved_one_id).first()
     if not lo:
         return Response({"error": "not_found"}, status=404)
