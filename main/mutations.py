@@ -1,6 +1,7 @@
 import strawberry
 from .types import (AuthPayload, RefreshPayload, RegisterPayload, VerifyOTPPayload,
-    SentOTPPayload, CheckOTPPayload, ChangePasswordPayload, LovedOneType, MarkNotificationReadPayload, UserType
+    SentOTPPayload, CheckOTPPayload, ChangePasswordPayload, LovedOneType, MarkNotificationReadPayload, 
+    UserType, DeleteAccountPayload, DeleteLovedOnePayload
 )
 from accounts.models import User, OTP, Notification
 from django.contrib.auth import authenticate
@@ -178,3 +179,23 @@ class Mutation:
             user.push_notifications_enabled = push_notifications_enabled
         user.save()
         return user
+
+    @strawberry.field
+    def delete_loved_one(self, info, id: int) -> DeleteLovedOnePayload:
+        user = info.context.get("request").user
+        if user is None or user.is_anonymous:
+           raise GraphQLError("Authentication failed", extensions={"code": "UNAUTHENTICATED"})
+        try:
+            loved_one = LovedOne.objects.get(id=id, user=user)
+            loved_one.delete()
+            return DeleteLovedOnePayload(success=True)
+        except LovedOne.DoesNotExist:
+            raise GraphQLError("Loved one not found", extensions={"code": "NOT_FOUND"})
+
+    @strawberry.field
+    def delete_account(self, info) -> DeleteAccountPayload:
+        user = info.context.get("request").user
+        if user is None or user.is_anonymous:
+           raise GraphQLError("Authentication failed", extensions={"code": "UNAUTHENTICATED"})
+        user.delete()
+        return DeleteAccountPayload(success=True)
