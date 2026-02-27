@@ -185,12 +185,10 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
         """
         from conversations.models import ConversationSession
 
-        pid = (profile_id or "default").strip()
-        user_id = int(pid) if pid.isdigit() else None
+        user_id = (profile_id or "default").strip()
 
         s = ConversationSession.objects.create(
             user_id=user_id,
-            profile_id=pid,
             loved_one_id=int(loved_one_id),
         )
         return int(s.id)
@@ -690,7 +688,7 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
     async def _send_openai_system_prompt(self):
         try:
             # normalize profile_id for RAG filters
-            _filt, profile_key = _db_filter_from_profile_id(self.cfg.profile_id)
+            profile_key = self.cfg.profile_id
 
             rag = self.rag.query(
                 profile_id=profile_key,
@@ -766,7 +764,7 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
             pass
 
         try:
-            _filt, profile_key = _db_filter_from_profile_id(self.cfg.profile_id)
+            profile_key = self.cfg.profile_id
 
             rag = self.rag.query(
                 profile_id=profile_key,
@@ -882,7 +880,7 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
 
         existing = set()
         try:
-            _filt, profile_key = _db_filter_from_profile_id(self.cfg.profile_id)
+            profile_key = self.cfg.profile_id
             recent = self.rag.query(
                 profile_id=profile_key,
                 loved_one_id=self.cfg.loved_one_id,
@@ -912,7 +910,7 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
         import uuid
         from .models import LovedOne
 
-        filt, _profile_key = _db_filter_from_profile_id(profile_id)
+        filt = {"user_id": profile_id}  # normalize profile_id for DB query
         lo = LovedOne.objects.filter(**filt, id=loved_one_id).first()
         if not lo:
             raise ValueError("loved_one not found")
@@ -928,9 +926,9 @@ class RealtimeVoiceConsumer(AsyncWebsocketConsumer):
 
         return uuid.uuid4().hex
 
-    async def _save_memory_to_db_and_rag(self, profile_id: str, loved_one_id: int, text: str):
-        memory_id = await self._db_create_memory(profile_id, loved_one_id, text)
-        _filt, profile_key = _db_filter_from_profile_id(profile_id)
+    async def _save_memory_to_db_and_rag(self, profile_key: str, loved_one_id: int, text: str):
+        memory_id = await self._db_create_memory(profile_key, loved_one_id, text)
+
         self.rag.add_memory(profile_id=profile_key, loved_one_id=loved_one_id, text=text, memory_id=str(memory_id))
         await self._send_json({"type": "event", "name": "memory.auto.saved", "memory_id": str(memory_id)})
 
