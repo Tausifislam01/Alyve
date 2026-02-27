@@ -7,7 +7,7 @@ from .models import ConversationSession, ConversationMessage
 @admin.register(ConversationSession)
 class ConversationSessionAdmin(ModelAdmin):
     list_display = ("id", "user", "loved_one", "last_activity_at")
-    search_fields = ("title", "user__email", "loved_one__name")
+    search_fields = ("user__email", "loved_one__name")
 
 
 @admin.register(ConversationMessage)
