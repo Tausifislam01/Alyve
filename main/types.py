@@ -95,4 +95,10 @@ class NotificationType:
 @strawberry.type
 class MarkNotificationReadPayload:
     success: bool
-    
+@strawberry.type
+class DeleteLovedOnePayload:
+    success: bool
+
+@strawberry.type
+class DeleteAccountPayload:
+    success: bool
