@@ -6,17 +6,15 @@ from rest_framework.response import Response
 
 from .models import ConversationSession, ConversationMessage
 from .serializers import ConversationSessionSerializer, ConversationMessageSerializer
+from rest_framework.exceptions import PermissionDenied
 
 
 def _resolve_session_queryset(request, profile_id: str):
-    """
-    If authenticated: sessions for that user.
-    Else: sessions matching profile_id.
-    """
-    u = getattr(request, "user", None)
-    if u is not None and getattr(u, "is_authenticated", False):
-        return ConversationSession.objects.filter(user=u)
-    return ConversationSession.objects.filter(profile_id=(profile_id or "default").strip())
+    user = request.user
+    if not user or not user.is_authenticated:
+        raise PermissionDenied("Authentication required")
+
+    return ConversationSession.objects.filter(user=user)
 
 
 @api_view(["GET"])
@@ -24,7 +22,7 @@ def session_list(request):
     profile_id = (request.query_params.get("profile_id") or "default").strip()
     loved_one_id = request.query_params.get("loved_one_id")
 
-    qs = _resolve_session_queryset(request, profile_id).order_by("-last_activity_at", "-started_at")
+    qs = _resolve_session_queryset(request, profile_id).order_by("-last_activity_at")
 
     if loved_one_id:
         qs = qs.filter(loved_one_id=loved_one_id)
@@ -67,12 +65,11 @@ def message_list(request):
             "ok": True,
             "session": {
                 "id": sess_data.get("id"),
-                "profile_id": sess_data.get("profile_id"),
+                "profile_id": str(session.user_id),
                 "user_display": sess_data.get("user_display"),
                 "loved_one_id": sess_data.get("loved_one"),
                 "loved_one_name": sess_data.get("loved_one_name"),
-                "started_at": sess_data.get("started_at"),
-                "ended_at": sess_data.get("ended_at"),
+                "last_activity_at": sess_data.get("last_activity_at"),
             },
             "count": qs.count(),
             "offset": offset,
@@ -94,8 +91,7 @@ def session_end(request):
     if not session:
         return Response({"ok": False, "error": "not_found"}, status=404)
 
-    if not session.ended_at:
-        session.ended_at = timezone.now()
-        session.save(update_fields=["ended_at"])
+    session.save(update_fields=["last_activity_at"])
+    return Response({"ok": True, "last_activity_at": session.last_activity_at})
 
-    return Response({"ok": True, "ended_at": session.ended_at})
+    

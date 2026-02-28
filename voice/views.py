@@ -107,16 +107,6 @@ def lovedone_create(request):
     user = None
     if getattr(request, "user", None) is not None and request.user.is_authenticated:
         user = request.user
-    elif profile_id.isdigit():
-        # Assign by FK id without importing User
-        lo = LovedOne.objects.create(
-            user_id=int(profile_id),
-            name=name,
-            relationship=relationship,
-            nickname_for_user=nickname_for_user,
-            speaking_style=speaking_style,
-        )
-        return Response({"ok": True, "loved_one_id": lo.id})
 
     lo = LovedOne.objects.create(
         user=user,  # None => anonymous/default
@@ -131,7 +121,7 @@ def lovedone_create(request):
 @api_view(["GET"])
 def lovedone_list(request):
     profile_id = (request.query_params.get("profile_id") or "default").strip()
-    qs, _profile_key = _lo_queryset_for_profile(profile_id, request=request)
+    qs = _lo_queryset_for_profile(profile_id, request=request)
 
     items = qs.order_by("-created_at")
     data = []
@@ -207,7 +197,8 @@ def add_memory(request):
     if not text:
         return Response({"error": "text is required"}, status=400)
 
-    qs, profile_key = _lo_queryset_for_profile(profile_id, request=request)
+    qs = _lo_queryset_for_profile(profile_id, request=request)
+    profile_key = str(profile_id)
     lo = qs.filter(id=loved_one_id).first()
     if not lo:
         return Response({"error": "loved_one not found"}, status=404)
@@ -242,7 +233,7 @@ def upload_voice_sample(request):
     if not f:
         return Response({"error": "file is required"}, status=400)
 
-    qs, _profile_key = _lo_queryset_for_profile(profile_id, request=request)
+    qs = _lo_queryset_for_profile(profile_id, request=request)
     lo = qs.filter(id=loved_one_id).first()
     if not lo:
         return Response({"error": "loved_one not found"}, status=404)

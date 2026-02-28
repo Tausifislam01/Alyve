@@ -34,7 +34,7 @@ class ConversationSession(models.Model):
 
     def __str__(self) -> str:
         lo = getattr(self.loved_one, "name", "") or f"loved_one:{self.loved_one_id}"
-        return f"Session#{self.id} ({self.profile_id}) ↔ {lo}"
+        return f"Session#{self.id} ({self.user_id}) ↔ {lo}"
 
 
 class ConversationMessage(models.Model):

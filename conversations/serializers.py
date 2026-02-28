@@ -32,22 +32,18 @@ class ConversationSessionSerializer(serializers.ModelSerializer):
         model = ConversationSession
         fields = [
             "id",
-            "profile_id",
             "user",
             "user_display",
             "loved_one",
             "loved_one_name",
             "loved_one_relationship",
-            "title",
-            "started_at",
-            "ended_at",
             "last_activity_at",
         ]
-        read_only_fields = ["id", "started_at", "last_activity_at"]
+        read_only_fields = ["id", "last_activity_at"]
 
     def get_user_display(self, obj: ConversationSession) -> str:
         name = _user_display(getattr(obj, "user", None))
-        return name or (obj.profile_id or "User")
+        return name or "User"
 
 
 class ConversationMessageSerializer(serializers.ModelSerializer):
